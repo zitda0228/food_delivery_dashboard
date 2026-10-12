@@ -1,3 +1,7 @@
+"""
+7주차 1번 수업: 시작 코드(필터 없음)
+6주차 시각화 리포트와 같은 형태입니다. 오늘 여기에 필터를 붙여 대시보드로 만듭니다.
+"""
 import sqlite3
 
 import pandas as pd
@@ -53,9 +57,9 @@ WITH s AS (                                 -- 세션의 첫 이벤트로 플랫
      GROUP BY session_id
 )
 SELECT s.주시작일,
-       s.platform       AS 플랫폼,
+       s.platform         AS 플랫폼,
        s.traffic_source AS 유입경로,
-       COUNT(DISTINCT e.session_id)                                                                   AS 세션수,
+       COUNT(DISTINCT e.session_id)                                                                           AS 세션수,
        COUNT(DISTINCT CASE WHEN e.event_name = 'view_restaurant' THEN e.session_id END)   AS 조회세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'add_to_cart'     THEN e.session_id END)   AS 장바구니세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'begin_checkout'  THEN e.session_id END)   AS 결제시작세션,
@@ -227,3 +231,72 @@ fig_step = px.bar(df_step, x="단계전환", y="단계전환율", color=col_name
 fig_step.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
 fig_step.update_layout(yaxis_title="단계 전환율 (%)", xaxis_title="")
 right_comp.plotly_chart(fig_step, width="stretch")
+
+st.divider()
+
+# ------------------------------------------------------------
+# 5. 드릴다운: 언제부터, 무엇 때문일까 영역
+# ------------------------------------------------------------
+st.header("드릴다운: 언제부터, 무엇 때문일까")
+
+available_groups = sorted(f[col_name].unique())
+drill_col1, drill_col2 = st.columns(2)
+with drill_col1:
+    selected_group = st.selectbox("자세히 볼 집단", available_groups)
+with drill_col2:
+    selected_step_label = st.selectbox("단계", [
+        "방문 → 식당조회",
+        "식당조회 → 장바구니",
+        "장바구니 → 결제시작",
+        "결제시작 → 주문"
+    ])
+
+step_mapping_pairs = {
+    "방문 → 식당조회": ("세션수", "조회세션"),
+    "식당조회 → 장바구니": ("조회세션", "장바구니세션"),
+    "장바구니 → 결제시작": ("장바구니세션", "결제시작세션"),
+    "결제시작 → 주문": ("결제시작세션", "주문세션")
+}
+prev_col, curr_col = step_mapping_pairs[selected_step_label]
+other_col = "유입경로" if col_name == "플랫폼" else "플랫폼"
+
+# 차트 ① 데이터 준비
+df_drill = f[f[col_name] == selected_group].copy()
+weekly_drill = df_drill.groupby(["주시작일", other_col])[[prev_col, curr_col]].sum().reset_index()
+
+weekly_drill["전환율"] = weekly_drill.apply(
+    lambda r: (r[curr_col] / r[prev_col] * 100) if r[prev_col] > 0 else None,
+    axis=1
+)
+
+fig_drill_1 = px.line(
+    weekly_drill,
+    x="주시작일",
+    y="전환율",
+    color=other_col,
+    markers=True,
+    title=f"① {selected_group}의 주별 {selected_step_label} 전환율 — {other_col}별로 쪼개 보기"
+)
+fig_drill_1.update_layout(yaxis_title="전환율 (%)", xaxis_title="")
+st.plotly_chart(fig_drill_1, width="stretch")
+st.caption("모든 갈래가 같은 시점에 함께 움직였다면, 그 축은 원인이 아닙니다.")
+
+# 차트 ② 데이터 준비
+df_fail = f.copy()
+df_fail["분류"] = df_fail[col_name].apply(lambda x: selected_group if x == selected_group else "그 외")
+weekly_fail = df_fail.groupby(["주시작일", "분류"])["결제실패"].sum().reset_index()
+
+color_map = {selected_group: "darkred", "그 외": "lightgray"}
+
+fig_drill_2 = px.bar(
+    weekly_fail,
+    x="주시작일",
+    y="결제실패",
+    color="분류",
+    barmode="group",
+    color_discrete_map=color_map,
+    title=f"주별 결제실패 건수 ({selected_group} vs 그 외)"
+)
+fig_drill_2.update_layout(yaxis_title="결제실패 건수", xaxis_title="")
+st.plotly_chart(fig_drill_2, width="stretch")
+st.caption("문제가 생긴 시점과 함께 움직였다면 원인 후보입니다. 함께 움직였다고 원인이 확정되지는 않습니다.")
