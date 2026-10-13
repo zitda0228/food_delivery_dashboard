@@ -8,17 +8,29 @@ st.set_page_config(page_title="사용자 행동 탐색 대시보드", layout="wi
 st.title("사용자 행동 탐색 대시보드")
 st.caption("주별 세션 퍼널 | 플랫폼 · 유입 경로별 | 2025.07 ~ 2026.06")
 
+AI_NOTES = {
+    "전체": "전체 28840개 세션 중 주문 전환율은 14.5%, 결제 전환율은 80.5%이며 가장 낮은 단계는 41.4%인 장바구니 단계였다. 전체적인 이탈은 장바구니 단계에서 가장 크게 발생하는 것으로 보인다.",
+    "Android": "안드로이드 16053개 세션의 주문 전환율은 14.3%, 결제 전환율은 76.8%였으며 2026-04-13 주부터 2026-05-25 주까지 결제 전환율이 크게 낮아지며 결제실패가 집중되었다. 이 시기 안드로이드 플랫폼의 결제 과정에 기술적 장애나 문제가 있었는지 확인이 필요하다.",
+    "iOS": "아이오닉(iOS) 또는 iOS 12787개 세션의 주문 전환율은 14.8%, 결제 전환율은 85.5%로 안드로이드보다 높았고 장바구니 전환율은 40.8%였다. 안드로이드와 달리 4~5월에 특별한 결제 전환율 하락 없이 안정적인 흐름을 유지한 것으로 보인다.",
+    "organic": "오가닉(organic) 유입은 22489개 세션으로 전체의 다수를 차지하며 주문 전환율 16.0%, 결제 전환율 80.4%, 장바구니 전환율 41.4%를 기록했다. 전체 평균과 유사한 자연 유입 패턴을 보이는 것으로 보인다.",
+    "paid_ad": "유료 광고(paid_ad)는 1595개 세션으로 500개를 초과하며 주문 전환율 26.3%, 결제 전환율 90.3%, 장바구니 전환율 53.7%로 다른 경로보다 효율이 높았다. 광고를 통해 유입된 사용자의 구매 의도가 상대적으로 더 뚜렷했던 것으로 보인다.",
+    "push": "푸시(push) 유입은 4635개 세션이며 2026-02-02 주에 처음 나타났고 주문 전환율 3.2%, 가장 낮은 조회 전환율은 28.4%였다. 푸시를 통해 유입된 사용자의 초기 관심도와 참여율이 상대적으로 낮았던 것으로 보인다.",
+    "referral": "레퍼럴(referral) 유입은 세션 수가 121개로 500개 미만이며 주문 전환율과 결제 전환율 모두 0.0%, 최저 전환율은 0.0%인 주문 단계였다. 표본 크기가 너무 작아 해당 경로의 효과를 단정하기 어렵추가적인 데이터 확인이 필요하다."
+}
+
+AI_SOURCE = "bot: Gemini가 미리 만든 해설 · 전체 기간 기준"
+
 # ------------------------------------------------------------
 # 0. 필요한 데이터만 추출 — 쓸 테이블과 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 처음 한 번만 만듦
 # ------------------------------------------------------------
-DATA_DIR = "data"                         # 원본 CSV를 넣어 둔 폴더
+DATA_DIR = "data"                        # 원본 CSV를 넣어 둔 폴더
 NEEDED = {                                # 이번 대시보드에 필요한 테이블과 컬럼
     "app_events": ["event_id", "event_datetime", "customer_id", "session_id",
                    "event_name", "platform", "traffic_source"],
 }
 
 @st.cache_resource
-def get_db():                             # 필요한 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 만듦 (처음 한 번만)
+def get_db():                            # 필요한 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 만듦 (처음 한 번만)
     con = sqlite3.connect(":memory:", check_same_thread=False)
     for name, cols in NEEDED.items():
         pd.read_csv(f"{DATA_DIR}/{name}.csv", usecols=cols).to_sql(name, con, index=False)
@@ -41,7 +53,7 @@ def get_db():                             # 필요한 컬럼만 메모리 DB에 
 # 1. 데이터 준비 — 정제된 events 테이블을 SQL로 집계
 # ------------------------------------------------------------
 @st.cache_data
-def query(sql):                           # SQL을 실행해 표로 돌려줌
+def query(sql):                         # SQL을 실행해 표로 돌려줌
     return pd.read_sql(sql, get_db())
 
 # 주 × 플랫폼 × 유입 경로별 세션 퍼널
@@ -55,7 +67,7 @@ WITH s AS (                                 -- 세션의 첫 이벤트로 플랫
 SELECT s.주시작일,
        s.platform         AS 플랫폼,
        s.traffic_source AS 유입경로,
-       COUNT(DISTINCT e.session_id)                                                                                                 AS 세션수,
+       COUNT(DISTINCT e.session_id)                                                                                                                                                                                                                           AS 세션수,
        COUNT(DISTINCT CASE WHEN e.event_name = 'view_restaurant' THEN e.session_id END)   AS 조회세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'add_to_cart'     THEN e.session_id END)   AS 장바구니세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'begin_checkout'  THEN e.session_id END)   AS 결제시작세션,
@@ -63,7 +75,7 @@ SELECT s.주시작일,
        SUM(CASE WHEN e.event_name = 'payment_fail' THEN 1 ELSE 0 END)                     AS 결제실패
   FROM events e
   JOIN s ON e.session_id = s.session_id
- WHERE s.주시작일 < '2026-06-29'            -- 이틀치뿐인 마지막 주 제외
+ WHERE s.주시작일 < '2026-06-29'           -- 이틀치뿐인 마지막 주 제외
  GROUP BY 1, 2, 3
  ORDER BY 1, 2, 3
 """
@@ -123,6 +135,31 @@ f = g[
     (g["주시작일"] <= selected_period[1])
 ]
 
+# ------------------------------------------------------------
+# 사이드바 데이터 다운로드 버튼 추가
+# ------------------------------------------------------------
+st.sidebar.html("<div style='margin-top: 30px;'></div>")
+st.sidebar.subheader("데이터 다운로드")
+download_col1, download_col2 = st.sidebar.columns(2)
+
+with download_col1:
+    st.download_button(
+        label="전체 다운로드",
+        data=df.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="전체_데이터.csv",
+        mime="text/csv",
+        width="stretch"
+    )
+
+with download_col2:
+    st.download_button(
+        label="부분 다운로드",
+        data=f.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="필터적용_데이터.csv",
+        mime="text/csv",
+        width="stretch"
+    )
+
 if f.empty:
     st.warning("선택한 조건에 해당하는 데이터가 없습니다. 필터를 바꿔 주세요.")
     st.stop()
@@ -139,7 +176,78 @@ c1.metric("세션 수", f"{t['세션수']:,}개")
 c2.metric("주문 전환율 (방문 → 주문)", f"{rate(t['주문세션'], t['세션수']):.1f}%")
 c3.metric("결제 전환율 (결제 시작 → 주문)", f"{rate(t['주문세션'], t['결제시작세션']):.1f}%")
 
-st.divider()
+# ------------------------------------------------------------
+# 규칙 기반 설명 문장 (st.info)
+# ------------------------------------------------------------
+def generate_rule_explanation(g_data, f_data, baseline_period):
+    # 1. 선택된 기간 검증 (마지막 4주 계산을 위해 최소 4주 필요)
+    f_sorted = f_data.sort_values("주시작일")
+    f_weeks = f_sorted["주시작일"].unique()
+    if len(f_weeks) < 4:
+        return "주문 전환율: 비교하려면 선택 기간을 4주 이상 골라 주세요", "결제 전환율: 비교하려면 선택 기간을 4주 이상 골라 주세요"
+    
+    # 최근 4주 데이터
+    recent_4w_dates = f_weeks[-4:]
+    recent_df = f_sorted[f_sorted["주시작일"].isin(recent_4w_dates)]
+    recent_sums = recent_df[["세션수", "결제시작세션", "주문세션"]].sum()
+    
+    recent_order_rate = rate(recent_sums["주문세션"], recent_sums["세션수"])
+    recent_checkout_rate = rate(recent_sums["주문세션"], recent_sums["결제시작세션"])
+    
+    start_week_str = str(recent_4w_dates[0])
+    period_str = f"{start_week_str}부터 4주"
+    
+    # 2. 기준 기간 데이터 준비 및 검증
+    base_df = g_data[
+        (g_data["주시작일"] >= baseline_period[0]) &
+        (g_data["주시작일"] <= baseline_period[1])
+    ]
+    
+    # 주별로 합산 후 전환율 계산 (분모가 0인 주는 제외)
+    base_weekly = base_df.groupby("주시작일")[["세션수", "결제시작세션", "주문세션"]].sum().reset_index()
+    
+    # 주문 전환율 주별 시리즈
+    order_rates = []
+    checkout_rates = []
+    for _, row in base_weekly.iterrows():
+        if row["세션수"] > 0:
+            order_rates.append(row["주문세션"] / row["세션수"] * 100)
+        if row["결제시작세션"] > 0:
+            checkout_rates.append(row["주문세션"] / row["결제시작세션"] * 100)
+            
+    if len(order_rates) < 4 or len(checkout_rates) < 4:
+        msg = "기준 기간을 이 집단의 데이터가 있는 시기로 옮겨 주세요"
+        return f"주문 전환율: {msg}", f"결제 전환율: {msg}"
+        
+    order_min, order_max = min(order_rates), max(order_rates)
+    checkout_min, checkout_max = min(checkout_rates), max(checkout_rates)
+    
+    # 문장 생성 함수
+    def build_sentence(metric_name, recent_val, p_min, p_max):
+        if recent_val < p_min:
+            diff = p_min - recent_val
+            return f"{metric_name}은 {period_str} 동안 {recent_val:.1f}%로, 평소 범위({p_min:.1f}% ~ {p_max:.1f}%)보다 {diff:.1f}%p 낮습니다."
+        elif recent_val > p_max:
+            diff = recent_val - p_max
+            return f"{metric_name}은 {period_str} 동안 {recent_val:.1f}%로, 평소 범위({p_min:.1f}% ~ {p_max:.1f}%)보다 {diff:.1f}%p 높습니다."
+        else:
+            return f"{metric_name}은 {period_str} 동안 {recent_val:.1f}%로, 평소 범위({p_min:.1f}% ~ {p_max:.1f}%) 안에 있습니다."
+
+    order_msg = build_sentence("주문 전환율", recent_order_rate, order_min, order_max)
+    checkout_msg = build_sentence("결제 전환율", recent_checkout_rate, checkout_min, checkout_max)
+    
+    return order_msg, checkout_msg
+
+ord_text, chk_text = generate_rule_explanation(g, f, selected_baseline_period)
+with st.container(border=True):
+    st.markdown("**📏 지금 숫자 읽기**")
+    st.markdown(f"- {ord_text}")
+    st.markdown(f"- {chk_text}")
+    st.caption(f"📏 자동 계산 · 평소 범위 기준 기간 {selected_baseline_period[0]} ~ {selected_baseline_period[1]} (주별 값)")
+    
+    with st.expander("🤖 AI 해설 · 전체", expanded=False):
+        st.write(AI_NOTES["전체"])
+    st.caption(AI_SOURCE)
 
 # ------------------------------------------------------------
 # 3. 차트
@@ -310,3 +418,8 @@ fig_drill_2 = px.bar(
 fig_drill_2.update_layout(yaxis_title="결제실패 건수", xaxis_title="")
 st.plotly_chart(fig_drill_2, width="stretch")
 st.caption("문제가 생긴 시점과 함께 움직였다면 원인 후보입니다. 함께 움직였다고 원인이 확정되지는 않습니다.")
+
+with st.expander(f"🤖 AI 해설 · {selected_group}", expanded=False):
+    note_text = AI_NOTES.get(selected_group, "이 집단의 해설은 아직 없습니다.")
+    st.write(note_text)
+st.caption(AI_SOURCE)
