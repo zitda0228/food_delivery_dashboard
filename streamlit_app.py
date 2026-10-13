@@ -1,7 +1,3 @@
-"""
-7주차 1번 수업: 시작 코드(필터 없음)
-6주차 시각화 리포트와 같은 형태입니다. 오늘 여기에 필터를 붙여 대시보드로 만듭니다.
-"""
 import sqlite3
 
 import pandas as pd
@@ -59,7 +55,7 @@ WITH s AS (                                 -- 세션의 첫 이벤트로 플랫
 SELECT s.주시작일,
        s.platform         AS 플랫폼,
        s.traffic_source AS 유입경로,
-       COUNT(DISTINCT e.session_id)                                                                           AS 세션수,
+       COUNT(DISTINCT e.session_id)                                                                                                 AS 세션수,
        COUNT(DISTINCT CASE WHEN e.event_name = 'view_restaurant' THEN e.session_id END)   AS 조회세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'add_to_cart'     THEN e.session_id END)   AS 장바구니세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'begin_checkout'  THEN e.session_id END)   AS 결제시작세션,
@@ -78,7 +74,7 @@ def load_data():
     data["주시작일"] = pd.to_datetime(data["주시작일"]).dt.date
     return data
 
-df = load_data()                          # 주 × 플랫폼 × 유입 경로별 세션 퍼널
+df = load_data()                        # 주 × 플랫폼 × 유입 경로별 세션 퍼널
 
 # ------------------------------------------------------------
 # 사이드바 필터
@@ -106,11 +102,25 @@ selected_traffic_sources = st.sidebar.multiselect(
     default=traffic_sources
 )
 
-f = df[
-    (df["주시작일"] >= selected_period[0]) &
-    (df["주시작일"] <= selected_period[1]) &
+# 평소 범위 기준 기간 슬라이더 추가
+default_baseline_end_idx = min(25, len(weeks) - 1)
+selected_baseline_period = st.sidebar.select_slider(
+    "평소 범위 기준 기간",
+    options=weeks,
+    value=(weeks[0], weeks[default_baseline_end_idx]),
+    help="문제가 없던 기간을 고르세요. 이 기간의 주별 값 범위를 '평소 범위'로 씁니다."
+)
+
+# 집단 조건(플랫폼·유입경로)만 적용한 데이터 g
+g = df[
     (df["플랫폼"].isin(selected_platforms)) &
     (df["유입경로"].isin(selected_traffic_sources))
+]
+
+# 기존 f는 g에 기간 조건을 더해 만듦
+f = g[
+    (g["주시작일"] >= selected_period[0]) &
+    (g["주시작일"] <= selected_period[1])
 ]
 
 if f.empty:
