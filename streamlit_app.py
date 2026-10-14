@@ -4,6 +4,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+ACCENT, GRAY = "#1F3A5F", "#BDBDBD" # ← 여기부터 추가
+ACCENT, GRAY = "#1F3A5F", "#BDBDBD" # ← 여기부터 추가 px.defaults.color_discrete_map = { "Android": ACCENT, "iOS": GRAY, "push": ACCENT, "organic": "#8C8C8C", "paid_ad": GRAY, "referral": "#DADADA", } px.defaults.color_discrete_sequence = [GRAY]
+
 st.set_page_config(page_title="사용자 행동 탐색 대시보드", layout="wide")
 st.title("사용자 행동 탐색 대시보드")
 st.caption("주별 세션 퍼널 | 플랫폼 · 유입 경로별 | 2025.07 ~ 2026.06")
@@ -225,7 +228,7 @@ with tab_overview:
 
     t = f[["세션수", "결제시작세션", "주문세션"]].sum()
     c1, c2, c3 = st.columns(3)
-    c1.metric("세션 수", f"{t['세션수']:,}개")
+    c1.metric("세션 수", f"{t['세션수']:,}개", border=True, help="선택한 조건의 전체 세션")
     c2.metric("주문 전환율 (방문 → 주문)", f"{rate(t['주문세션'], t['세션수']):.1f}%")
     c3.metric("결제 전환율 (결제 시작 → 주문)", f"{rate(t['주문세션'], t['결제시작세션']):.1f}%")
 
