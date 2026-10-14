@@ -18,7 +18,7 @@ NEEDED = {                                # 이번 대시보드에 필요한 테
 }
 
 @st.cache_resource
-def get_db():                             # 필요한 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 만듦 (처음 한 번만)
+def get_db():                            # 필요한 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 만듦 (처음 한 번만)
     con = sqlite3.connect(":memory:", check_same_thread=False)
     for name, cols in NEEDED.items():
         pd.read_csv(f"{DATA_DIR}/{name}.csv", usecols=cols).to_sql(name, con, index=False)
@@ -41,7 +41,7 @@ def get_db():                             # 필요한 컬럼만 메모리 DB에 
 # 1. 데이터 준비 — 정제된 events 테이블을 SQL로 집계
 # ------------------------------------------------------------
 @st.cache_data
-def query(sql):                           # SQL을 실행해 표로 돌려줌
+def query(sql):                         # SQL을 실행해 표로 돌려줌
     return pd.read_sql(sql, get_db())
 
 # 주 × 플랫폼 × 유입 경로별 세션 퍼널
@@ -55,7 +55,7 @@ WITH s AS (                                 -- 세션의 첫 이벤트로 플랫
 SELECT s.주시작일,
        s.platform     AS 플랫폼,
        s.traffic_source AS 유입경로,
-       COUNT(DISTINCT e.session_id)                                                                                                                                                           AS 세션수,
+       COUNT(DISTINCT e.session_id)                                                                                                                                                                                                                                                                                                                                                            AS 세션수,
        COUNT(DISTINCT CASE WHEN e.event_name = 'view_restaurant' THEN e.session_id END)   AS 조회세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'add_to_cart'    THEN e.session_id END)   AS 장바구니세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'begin_checkout'  THEN e.session_id END)   AS 결제시작세션,
@@ -574,4 +574,68 @@ with tab_explore:
 
 with tab_action:
     st.caption("이 탭에서는 지표 기반 액션 플랜과 개선 과제를 확인할 수 있습니다.")
-    st.caption("액션 카드는 다음 단계에서 추가합니다.")
+    st.caption("측정 KPI의 현재 값은 선택한 기간의 마지막 4주로 계산합니다")
+
+    # 선택된 기간의 주 목록 정렬
+    selected_weeks = sorted(f["주시작일"].unique())
+
+    if len(selected_weeks) < 4:
+        last_4_weeks = selected_weeks
+    else:
+        last_4_weeks = selected_weeks[-4:]
+
+    # 사이드바 기간 필터만 적용한 데이터 (플랫폼·유입경로 필터 무시)
+    df_period_only = df[
+        (df["주시작일"] >= selected_period[0]) &
+        (df["주시작일"] <= selected_period[1])
+    ]
+    df_last4_period_only = df_period_only[df_period_only["주시작일"].isin(last_4_weeks)]
+
+    # 카드 1 계산: 플랫폼이 Android인 데이터의 결제 전환율 (주문세션 ÷ 결제시작세션)
+    df_card1 = df_last4_period_only[df_last4_period_only["플랫폼"] == "Android"]
+    order_col_name = "주문세션" if "주문세션" in df_card1.columns else df_card1.columns[5]
+    pay_start_col_name = "결제시작세션" if "결제시작세션" in df_card1.columns else df_card1.columns[4]
+    
+    sum_pay_start = df_card1[pay_start_col_name].sum() if not df_card1.empty else 0
+    sum_order_1 = df_card1[order_col_name].sum() if not df_card1.empty else 0
+    
+    if sum_pay_start > 0:
+        val_card1 = f"{(sum_order_1 / sum_pay_start * 100):.1f}%"
+    else:
+        val_card1 = "데이터 없음"
+
+    # 카드 2 계산: 유입경로가 push인 데이터의 방문 → 식당 조회 전환율 (조회세션 ÷ 세션수)
+    df_card2 = df_last4_period_only[df_last4_period_only["유입경로"] == "push"]
+    sum_session_2 = df_card2["세션수"].sum() if not df_card2.empty else 0
+    sum_view_2 = df_card2["조회세션"].sum() if not df_card2.empty else 0
+
+    if sum_session_2 > 0:
+        val_card2 = f"{(sum_view_2 / sum_session_2 * 100):.1f}%"
+    else:
+        val_card2 = "데이터 없음"
+
+    action_col1, action_col2 = st.columns(2)
+
+    with action_col1:
+        with st.container(border=True):
+            st.markdown("- 문제: 결제 시작에서 주문 전환율이 2026-04-13 주부터 하락해 5월 3주차 최저 41.4%, 6월 1주차부터 회복")
+            st.markdown("- 근거: 같은 기간 iOS는 평소 범위 안 · Android 결제 실패가 주 4건 이하 → 최대 153건")
+            st.markdown("- 성격: 특정 시점에 발생한 문제")
+            st.markdown("- 액션: 추가 분석: 앱 버전별로 결제 실패 확인 → 모니터링: 결제 전환율이 평소 범위를 벗어나는지 매주 점검")
+            st.markdown("- 우선순위: 영향 큼 · 실행 쉬움 → 바로 실행")
+            st.markdown("- **측정 KPI**: Android 결제 전환율 (최근 4주)")
+            st.markdown("- **대시보드에서**: 개요 탭 규칙 문장(플랫폼 Android) · 탐색 탭 드릴다운")
+            st.metric("Android 결제 전환율 (최근 4주)", val_card1)
+            st.caption("대시보드에서: 개요 탭 규칙 문장(플랫폼 Android) · 탐색 탭 드릴다운")
+
+    with action_col2:
+        with st.container(border=True):
+            st.markdown("- 문제: 방문 → 식당 조회 전환율 28.4% (다른 경로 57-69%), 주문 전환율 3.2%")
+            st.markdown("- 근거: 2026년 2월부터 월별 세션의 30-36%가 push · 기간 내내 25-35%")
+            st.markdown("- 성격: 전체 구간에 세그먼트별 반응 차이")
+            st.markdown("- 액션: 실험: 일부 사용자에게만 푸시 대상과 문구를 바꿔 방문 → 식당 조회 전환율 비교")
+            st.markdown("- 우선순위: 효과 불확실 · 실행 쉬움 → 실험부터")
+            st.markdown("- **측정 KPI**: push 방문 → 식당 조회 전환율(최근 4주)")
+            st.markdown("- **대시보드에서**: 탐색 탭 비교 기준 '유입경로' · 드릴다운 push")
+            st.metric("push 방문 → 식당 조회 전환율 (최근 4주)", val_card2)
+            st.caption("대시보드에서: 탐색 탭 비교 기준 '유입경로' · 드릴다운 push")
