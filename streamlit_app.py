@@ -1,30 +1,71 @@
 import sqlite3
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-ACCENT, GRAY = "#1F3A5F", "#BDBDBD" # ← 여기부터 추가
-ACCENT, GRAY = "#1F3A5F", "#BDBDBD" # ← 여기부터 추가 px.defaults.color_discrete_map = { "Android": ACCENT, "iOS": GRAY, "push": ACCENT, "organic": "#8C8C8C", "paid_ad": GRAY, "referral": "#DADADA", } px.defaults.color_discrete_sequence = [GRAY]
+ACCENT, GRAY = "#1F3A5F", "#BDBDBD"
+px.defaults.color_discrete_map = { "Android": ACCENT, "iOS": GRAY, "push": ACCENT, "organic": "#8C8C8C", "paid_ad": GRAY, "referral": "#DADADA", }
+px.defaults.color_discrete_sequence = [GRAY]
 
 st.set_page_config(page_title="사용자 행동 탐색 대시보드", layout="wide")
 st.title("사용자 행동 탐색 대시보드")
 st.caption("주별 세션 퍼널 | 플랫폼 · 유입 경로별 | 2025.07 ~ 2026.06")
 
 # ------------------------------------------------------------
-# 0. 필요한 데이터만 추출 — 쓸 테이블과 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 처음 한 번만 만듦
+# 0. 필요한 데이터만 추출 — 업로드 파일 또는 기본 데이터 처리
 # ------------------------------------------------------------
-DATA_DIR = "data"                         # 원본 CSV를 넣어 둔 폴더
-NEEDED = {                                # 이번 대시보드에 필요한 테이블과 컬럼
+DATA_DIR = "data"                        # 원본 CSV를 넣어 둔 폴더
+NEEDED = {                               # 이번 대시보드에 필요한 테이블과 컬럼
     "app_events": ["event_id", "event_datetime", "customer_id", "session_id",
                    "event_name", "platform", "traffic_source"],
 }
 
+# 1) 파일 업로드 위젯을 탭보다 먼저 생성하여 세션 스테이트 관리 및 파일 바이트 추출
+uploaded_file = st.file_uploader("app_events.csv 올리기", type="csv", key="upload_file")
+
+file_bytes = uploaded_file.getvalue() if uploaded_file is not None else None
+uploaded_filename = uploaded_file.name if uploaded_file is not None else None
+
+# 파일 업로드/삭제 상태 변경 감지를 위한 세션 상태 관리
+if "prev_uploaded_filename" not in st.session_state:
+    st.session_state["prev_uploaded_filename"] = uploaded_filename
+
+if st.session_state["prev_uploaded_filename"] != uploaded_filename:
+    st.session_state["filter_version"] = st.session_state.get("filter_version", 0) + 1
+    st.session_state["prev_uploaded_filename"] = uploaded_filename
+
+# 컬럼 검증 및 데이터 소스 표시 이름 결정 (캐시 함수 바깥에서 처리)
+is_valid_upload = True
+missing_columns = []
+data_source_label = "data 폴더 기본 파일"
+
+if uploaded_file is not None:
+    try:
+        # 헤더만 읽어서 필요한 컬럼 확인
+        header_df = pd.read_csv(uploaded_file, nrows=0)
+        file_cols = header_df.columns.tolist()
+        required_cols = NEEDED["app_events"]
+        missing_columns = [col for col in required_cols if col not in file_cols]
+        
+        if missing_columns:
+            is_valid_upload = False
+        else:
+            data_source_label = f"올린 파일 {uploaded_filename}"
+    except Exception:
+        is_valid_upload = False
+        missing_columns = NEEDED["app_events"]
+
 @st.cache_resource
-def get_db():                            # 필요한 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 만듦 (처음 한 번만)
+def get_db(f_bytes):                     # 필요한 컬럼만 메모리 DB에 올리고, 정제 테이블 events를 만듦
     con = sqlite3.connect(":memory:", check_same_thread=False)
-    for name, cols in NEEDED.items():
-        pd.read_csv(f"{DATA_DIR}/{name}.csv", usecols=cols).to_sql(name, con, index=False)
+    if f_bytes is not None:
+        import io
+        df_uploaded = pd.read_csv(io.BytesIO(f_bytes), usecols=NEEDED["app_events"])
+        df_uploaded.to_sql("app_events", con, index=False)
+    else:
+        for name, cols in NEEDED.items():
+            pd.read_csv(f"{DATA_DIR}/{name}.csv", usecols=cols).to_sql(name, con, index=False)
+            
     # 5주차 제외 규칙: QA 계정 제외 · 중복 이벤트 제거
     con.execute("""
         CREATE TABLE events AS
@@ -32,11 +73,11 @@ def get_db():                            # 필요한 컬럼만 메모리 DB에 �
           FROM (SELECT *,
                        ROW_NUMBER() OVER (PARTITION BY session_id, event_datetime, event_name
                                           ORDER BY event_id) AS dup
-                  FROM app_events
+                  From app_events
                  WHERE customer_id NOT LIKE 'QA%')
          WHERE dup = 1
     """)
-    # 세션별로 묶는 집계가 빨라지도록 session_id에 인덱스를 붙임 (없으면 첫 실행이 몇 분 걸릴 수 있음)
+    # 세션별로 묶는 집계가 빨라지도록 session_id에 인덱스를 붙임
     con.execute("CREATE INDEX idx_events_session ON events(session_id)")
     return con
 
@@ -44,12 +85,12 @@ def get_db():                            # 필요한 컬럼만 메모리 DB에 �
 # 1. 데이터 준비 — 정제된 events 테이블을 SQL로 집계
 # ------------------------------------------------------------
 @st.cache_data
-def query(sql):                         # SQL을 실행해 표로 돌려줌
-    return pd.read_sql(sql, get_db())
+def query(sql, f_bytes):                 # SQL을 실행해 표로 돌려줌
+    return pd.read_sql(sql, get_db(f_bytes))
 
 # 주 × 플랫폼 × 유입 경로별 세션 퍼널
 SQL_WEEKLY_FUNNEL = """
-WITH s AS (                                 -- 세션의 첫 이벤트로 플랫폼 · 유입 경로 · 주 정하기
+WITH s AS (                            -- 세션의 첫 이벤트로 플랫폼 · 유입 경로 · 주 정하기
     SELECT session_id, platform, traffic_source,
            DATE(MIN(event_datetime), 'weekday 0', '-6 days') AS 주시작일
       FROM events
@@ -58,7 +99,7 @@ WITH s AS (                                 -- 세션의 첫 이벤트로 플랫
 SELECT s.주시작일,
        s.platform     AS 플랫폼,
        s.traffic_source AS 유입경로,
-       COUNT(DISTINCT e.session_id)                                                                                                                                                                                                                                                                                                                                                            AS 세션수,
+       COUNT(DISTINCT e.session_id)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          AS 세션수,
        COUNT(DISTINCT CASE WHEN e.event_name = 'view_restaurant' THEN e.session_id END)   AS 조회세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'add_to_cart'    THEN e.session_id END)   AS 장바구니세션,
        COUNT(DISTINCT CASE WHEN e.event_name = 'begin_checkout'  THEN e.session_id END)   AS 결제시작세션,
@@ -72,12 +113,16 @@ SELECT s.주시작일,
 """
 
 @st.cache_data
-def load_data():
-    data = query(SQL_WEEKLY_FUNNEL)
+def load_data(f_bytes):
+    # 유효하지 않은 업로드인 경우 기본 파일 데이터 사용
+    actual_bytes = f_bytes if (f_bytes is not None and is_valid_upload) else None
+    data = query(SQL_WEEKLY_FUNNEL, actual_bytes)
     data["주시작일"] = pd.to_datetime(data["주시작일"]).dt.date
     return data
 
-df = load_data()                          # 주 × 플랫폼 × 유입 경로별 세션 퍼널
+# 유효한 업로드 바이트 전달 (유효하지 않으면 None 전달하여 기본 파일 사용)
+active_bytes = file_bytes if (file_bytes is not None and is_valid_upload) else None
+df = load_data(active_bytes)                      # 주 × 플랫폼 × 유입 경로별 세션 퍼널
 
 AI_NOTES = {
 "전체": "전체 세션 수는 28,840개이며 주문 전환율은 14.5%, 가장 낮은 단계 전환율은 장바구니 단계의 41.4%이다. 전체 기간 동안 플랫폼과 경로별로 전환 성과에 차이가 나타난 것으로 보인다.",
@@ -206,16 +251,30 @@ elif len(selected_traffic_sources) == 0:
 else:
     traffic_str = ", ".join(selected_traffic_sources)
 
-st.caption(f"🔎 보고 있는 조건: 기간 ({period_str}) · 플랫폼 ({platform_str}) · 유입 경로 ({traffic_str})")
+st.caption(f"🔎 보고 있는 조건: 데이터 ({data_source_label}) · 기간 ({period_str}) · 플랫폼 ({platform_str}) · 유입 경로 ({traffic_str})")
+
+# ------------------------------------------------------------
+# 화면 탭 구성 (개요, 탐색, 액션, 데이터 업로드)
+# ------------------------------------------------------------
+tab_overview, tab_explore, tab_action, tab_upload = st.tabs(["📊 개요", "🔍 탐색", "✅ 액션", "📤 데이터 업로드"])
+
+with tab_upload:
+    st.caption("이 탭에서는 분석할 원본 CSV 파일을 직접 업로드하여 대시보드에 반영할 수 있습니다.")
+    st.markdown("### 📤 데이터 업로드")
+    
+    # 업로드 위젯 (key에 필터 초기화 번호 미포함)
+    # 이미 상단에서 uploaded_file 변수로 정의되어 있으므로 여기서는 가이드에 맞게 안내 및 상태 표시
+    if uploaded_file is not None:
+        if not is_valid_upload:
+            st.error(f"업로드한 파일에 필요한 컬럼이 누락되었습니다. 빠진 컬럼: {', '.join(missing_columns)}. data 폴더 기본 파일로 대체하여 표시합니다.")
+        else:
+            st.success(f"'{uploaded_filename}' 파일이 정상적으로 로드되었습니다.")
+    else:
+        st.info("app_events.csv 파일을 업로드하면 해당 데이터를 기준으로 대시보드가 업데이트됩니다.")
 
 if f.empty:
     st.warning("선택한 조건에 해당하는 데이터가 없습니다. 필터를 바꿔 주세요.")
     st.stop()
-
-# ------------------------------------------------------------
-# 화면 탭 구성 (개요, 탐색, 액션)
-# ------------------------------------------------------------
-tab_overview, tab_explore, tab_action = st.tabs(["📊 개요", "🔍 탐색", "✅ 액션"])
 
 with tab_overview:
     st.caption("이 탭에서는 전체 핵심 지표(KPI)와 주요 전환 성과 흐름을 확인할 수 있습니다.")
@@ -229,8 +288,8 @@ with tab_overview:
     t = f[["세션수", "결제시작세션", "주문세션"]].sum()
     c1, c2, c3 = st.columns(3)
     c1.metric("세션 수", f"{t['세션수']:,}개", border=True, help="선택한 조건의 전체 세션")
-    c2.metric("주문 전환율 (방문 → 주문)", f"{rate(t['주문세션'], t['세션수']):.1f}%")
-    c3.metric("결제 전환율 (결제 시작 → 주문)", f"{rate(t['주문세션'], t['결제시작세션']):.1f}%")
+    c2.metric("주문 전환율 (방문 → 주문)", f"{rate(t['주문세션'], t['세션수']):.1f}%", border=True, help="주문 세션 ÷ 전체 세션")
+    c3.metric("결제 전환율 (결제 시작 → 주문)", f"{rate(t['주문세션'], t['결제시작세션']):.1f}%", border=True, help="주문 세션 ÷ 결제 시작 세션")
 
     # ------------------------------------------------------------
     # 규칙 기반 설명 문장 (KPI 카드 바로 아래 st.info 추가)
